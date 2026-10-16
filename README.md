@@ -109,10 +109,12 @@ backend.py (FastAPI)  ── /chat  /chat/stream  /workspaces/*  /workspace/tree
         ├── LCtext2.py            agent_loop：工具调用循环、todo / task 管理
         ├── knowledge_base.py     RAG：分块 + BM25 + 向量 + RRF 融合 + 重排
         │                         提供 search_doc / search_doc_fast / search_doc_quality
-        ├── code_executor_tool.py execute_code → 子进程 _exec_worker.py (IPython)
-        │                          write_file / edit_file
-        ├── page_tool.py          create_page / edit_page / list_pages → 工作区 pages/
-        ├── shell_tool.py         run_shell → bash（无则降级 PowerShell）
+        ├── tools/                Agent 可调用的工具（详见 tools/__init__.py）
+        │   ├── code_executor_tool.py  execute_code → 子进程 tools/_exec_worker.py (IPython)
+        │   ├── file_tool.py           write_file / edit_file
+        │   ├── page_tool.py           create_page / edit_page / list_pages → 工作区 pages/
+        │   ├── shell_tool.py          run_shell → bash（无则降级 PowerShell）
+        │   └── _exec_worker.py        代码执行子进程（勿与上面的管理端分开）
         └── utils.py              路径白名单、文本提取、上下文压缩、限流器
 ```
 
@@ -414,7 +416,7 @@ agent 收到后会用 `read_file` 按元素标识定位、用 `edit_page` 做最
 
 这个服务会执行模型生成的代码，请把它当作**可信内网工具**对待。
 
-- **代码执行隔离**：模型代码在独立子进程 `_exec_worker.py` 中运行。
+- **代码执行隔离**：模型代码在独立子进程 `tools/_exec_worker.py` 中运行。
   子进程只继承白名单环境变量，`OPENAI_API_KEY` / `TAVILY_API_KEY` 不会进入子进程；
   超时可真正 kill 子进程（此前用线程实现，死循环杀不掉）。
   AST 静态检查只是「减速带」，不是安全边界。
@@ -526,11 +528,13 @@ agent/
 ├── knowledge_base.py     RAG 管道与检索工具
 ├── utils.py              公共工具（路径安全、文本/PDF 提取、上下文压缩…）
 ├── workspaces.py         工作区登记与切换
-├── page_tool.py          页面制作工具（create_page / edit_page / list_pages）
-├── file_tool.py          文件读写工具（write_file / edit_file）
-├── shell_tool.py         命令行工具（run_shell）
-├── code_executor_tool.py 代码执行工具（子进程管理端）
-├── _exec_worker.py       代码执行子进程（勿改名/勿移动）
+├── tools/                Agent 可调用的工具集
+│   ├── __init__.py       工具总览与注册说明（新增工具看这里）
+│   ├── page_tool.py          页面制作（create_page / edit_page / list_pages）
+│   ├── file_tool.py          文件读写（write_file / edit_file）
+│   ├── shell_tool.py         命令行（run_shell）
+│   ├── code_executor_tool.py 代码执行（子进程管理端）
+│   └── _exec_worker.py       代码执行子进程（勿与上一行分开）
 ├── frontend/             前端静态资源（本地 vendor，离线可用）
 │   ├── index.html  script.js  styles.css  picker.js
 │   └── vendor/           Vue / marked / DOMPurify / KaTeX / highlight.js / 字体
@@ -551,10 +555,12 @@ agent/
 | `backend.py` | FastAPI 服务与全部 HTTP 接口 |
 | `LCtext2.py` | Agent 循环与本地工具定义 |
 | `knowledge_base.py` | RAG 管道与检索工具 |
-| `code_executor_tool.py` | 代码执行工具（子进程管理端） |
-| `_exec_worker.py` | 代码执行子进程（勿删） |
-| `shell_tool.py` | 命令行执行工具 `run_shell`（bash / PowerShell） |
-| `page_tool.py` | 页面制作工具 `create_page` / `edit_page` / `list_pages` |
+| `tools/` | **Agent 可调用的工具集**，新增工具看 `tools/__init__.py` 里的注册说明 |
+| `tools/code_executor_tool.py` | 代码执行工具（子进程管理端） |
+| `tools/_exec_worker.py` | 代码执行子进程（由上一行按路径拉起，勿与它分开） |
+| `tools/shell_tool.py` | 命令行执行工具 `run_shell`（bash / PowerShell） |
+| `tools/page_tool.py` | 页面制作工具 `create_page` / `edit_page` / `list_pages` |
+| `tools/file_tool.py` | 文件读写工具 `write_file` / `edit_file` |
 | `workspaces.py` | 工作区登记/切换、本机目录浏览与新建文件夹 |
 | `utils.py` | 公共工具 |
 | `docs/PROJECT_LAYOUT.md` | **文件分类与存放约定**：每个文件干什么、新文件该放哪、哪些目录不能挪 |

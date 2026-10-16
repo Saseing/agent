@@ -1,5 +1,5 @@
 """
-page_tool.py - 前端页面制作工具
+tools/page_tool.py - 前端页面制作工具
 
 提供 create_page / edit_page / list_pages 三个 LangChain 工具，让 Agent
 能按自然语言描述直接产出可在应用内实时预览的前端页面。

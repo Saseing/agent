@@ -14,9 +14,13 @@ langchain-openai>=1.2       # 走 OpenAI 兼容协议，可对接 DeepSeek / Das
 langchain-tavily>=0.2.18    # 联网搜索工具 tavily_search（没有 TAVILY_API_KEY 时该工具不可用）
 
 # ── 代码执行与图表 ───────────────────────────────────────────────────────────
+# 这几个是**模型写出来的代码**要用的库：执行器会把它们预先 import 进执行 shell
+# （见 tools/_exec_worker.py 里的 _BOOTSTRAP 字符串）。缺了不影响应用启动，
+# 但 execute_code 一跑就报 ModuleNotFoundError。
 numpy>=2.2
+pandas>=2.2
 matplotlib>=3.10
-IPython>=9.0                # _exec_worker.py 用它的 InteractiveShell 执行代码并捕获输出
+IPython>=9.0                # tools/_exec_worker.py 用它的 InteractiveShell 执行代码并捕获输出
 
 # ── 知识库：文档解析 ─────────────────────────────────────────────────────────
 -r kb_requirements.txt      # PyPDF2 / python-docx / openpyxl / python-pptx

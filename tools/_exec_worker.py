@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-_exec_worker.py - 代码执行子进程
+tools/_exec_worker.py - 代码执行子进程
 
 由 code_executor_tool.CodeExecutor 以子进程方式启动，通过 stdin/stdout
 上的 JSON Lines 协议通信。每个请求一行 JSON，每个响应一行 JSON。

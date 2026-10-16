@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-shell_tool.py - 通用命令行执行工具
+tools/shell_tool.py - 通用命令行执行工具
 
 为 Agent 提供执行 shell 命令的能力。设计要点：
 

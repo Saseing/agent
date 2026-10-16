@@ -14,10 +14,10 @@ logger = logging.getLogger("NewAgent.LCtext2")
 
 # 确保脚本所在目录在 Python 路径中（解决 runpy.run_path 等场景找不到模块的问题）
 sys.path.insert(0, str(Path(__file__).parent))
-from code_executor_tool import execute_code, reset_code_environment
-from file_tool import write_file, edit_file
-from page_tool import create_page, edit_page, list_pages
-from shell_tool import run_shell
+from tools.code_executor_tool import execute_code, reset_code_environment
+from tools.file_tool import write_file, edit_file
+from tools.page_tool import create_page, edit_page, list_pages
+from tools.shell_tool import run_shell
 from utils import is_path_allowed, extract_text as _shared_extract_text, compress_tool_result, build_conversation_memory, extract_tool_context, TASKS_DIR, maybe_compress_agent_context
 
 dotenv.load_dotenv()

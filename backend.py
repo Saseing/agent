@@ -77,8 +77,8 @@ from LCtext2 import (
     _rebuild_chain,
 )
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
-from code_executor_tool import get_executor
-from page_tool import (
+from tools.code_executor_tool import get_executor
+from tools.page_tool import (
     create_page, edit_page, list_pages,
     PAGES_DIR_NAME, ALLOWED_PAGE_SUFFIXES,
 )
@@ -126,7 +126,7 @@ async def _lifespan(app: FastAPI):
         except (asyncio.CancelledError, Exception):
             pass
         try:
-            from code_executor_tool import _shutdown_executor
+            from tools.code_executor_tool import _shutdown_executor
             _shutdown_executor()
         except Exception:
             pass

@@ -1,5 +1,5 @@
 """
-file_tool.py - 文件写入与编辑工具
+tools/file_tool.py - 文件写入与编辑工具
 
 提供 write_file 和 edit_file 两个 LangChain 工具，
 供 Agent 创建新文件或精确编辑已有文件。

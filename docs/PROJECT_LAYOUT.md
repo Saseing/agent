@@ -19,15 +19,20 @@
 | `workspaces.py` | ~533 | 工作区登记与切换、本机目录浏览、新建文件夹 |
 | `utils.py` | ~765 | 公共工具：路径与安全校验、文本/PDF 提取、历史压缩、速率限制器等 |
 
-### 2. 工具（Agent 能调用的能力）
+### 2. 工具（`tools/`，Agent 能调用的能力）
 
 | 文件 | 职责 |
 |---|---|
-| `page_tool.py` | 前端页面制作：`create_page` / `edit_page` / `list_pages` |
-| `file_tool.py` | 文件读写：`write_file` / `edit_file` |
-| `shell_tool.py` | 命令行执行 `run_shell`（bash 语法自动降级为 PowerShell） |
-| `code_executor_tool.py` | Python 代码执行工具（子进程管理端、超时与资源限制） |
-| `_exec_worker.py` | 代码执行的**子进程脚本**，由 `code_executor_tool.py` 按路径拉起。**勿改名、勿移动**，否则 `execute_code` 直接失效 |
+| `tools/__init__.py` | 工具总览 + **新增工具的注册说明**（要同时改 `LCtext2.LC_TOOLS` / `TOOL_MAP` 与 `backend.all_tools`） |
+| `tools/page_tool.py` | 前端页面制作：`create_page` / `edit_page` / `list_pages` |
+| `tools/file_tool.py` | 文件读写：`write_file` / `edit_file` |
+| `tools/shell_tool.py` | 命令行执行 `run_shell`（bash 语法自动降级为 PowerShell） |
+| `tools/code_executor_tool.py` | Python 代码执行工具（子进程管理端、超时与资源限制） |
+| `tools/_exec_worker.py` | 代码执行的**子进程脚本**，由上一行按 `Path(__file__).parent / "_exec_worker.py"` 拉起。**两者必须待在同一目录**，否则 `execute_code` 直接失效 |
+
+被谁引用：只有 `LCtext2.py`（定义工具、进 `TOOL_MAP`）与 `backend.py`（绑定 `all_tools`、取执行器实例）导入这个包。
+工具模块内部用 `from utils import ...` 引用项目根的公共模块 —— `tools/__init__.py` 里做了 `sys.path` 兜底，
+因此单独 `import tools.xxx`（写测试、跑脚本）也能正常工作。
 
 ### 3. 知识库
 
@@ -100,12 +105,13 @@
 
 | 你要加的东西 | 放哪里 |
 |---|---|
-| 一个新的 Agent 工具 | 项目根，命名 `<用途>_tool.py`，然后在 `LCtext2.py` 的 `TOOL_MAP` 与 `backend.py` 的 `all_tools` 里各注册一次（**两处都要**，否则"模型能调用、后端找不到工具"） |
+| 一个新的 Agent 工具 | `tools/` 下新建 `<用途>_tool.py`，然后在**两处**注册：`LCtext2.py` 的 `LC_TOOLS`+`TOOL_MAP`、`backend.py` 的 `all_tools`+`TOOL_MAP`（漏一处会"模型能调用、后端找不到工具"） |
 | 一个新的 HTTP 接口 | `backend.py`（当前所有接口都在这里；若将来拆分，按 `/chat`、`/workspaces`、`/pages` 分文件） |
+| 一个与工具绑定的子进程脚本 | 与它的管理端**同一个目录**（如 `tools/_exec_worker.py` 与 `tools/code_executor_tool.py`），因为路径是按 `Path(__file__).parent` 拼的 |
 | 前端改动 | `frontend/`（静态文件，改完刷新页面即生效；后端已给资源加了版本号，不会串缓存） |
 | 一份说明文档 | `docs/` |
 | 一个启动/运维脚本 | `scripts/`（当前还没有，需要时新建） |
-| 测试 | 新建 `tests/`（记得把 `.gitignore` 里的 `_local/` 下方注释所述的那行删掉——目前 `_local/legacy/tests/` 是旧的、无关的脚本） |
+| 测试 | 新建 `tests/`（记得处理 `.gitignore` 里 `_local/` 那段注释所述的情况——目前 `_local/legacy/tests/` 是旧的、无关的脚本） |
 | 只在本机用的资料 | `_local/`（参考文档放 `reference/`） |
 | 临时验证脚本 | 系统临时目录，不要留在项目里（`git status` 保持干净） |
 
@@ -113,7 +119,9 @@
 
 ## 六、不要做的事（都踩过坑）
 
-- **不要移动 `_exec_worker.py`**：`code_executor_tool.py` 按路径拉起它。
+- **不要把 `tools/_exec_worker.py` 与 `tools/code_executor_tool.py` 分开**：后者按
+  `Path(__file__).parent / "_exec_worker.py"` 拉起子进程，分开放 `execute_code` 立刻失效。
+- **移动工具模块后要改两处导入**：`LCtext2.py`（工具定义与 `TOOL_MAP`）和 `backend.py`（`all_tools` 与执行器）。
 - **不要用 PowerShell 的 `Get-Content`/`Set-Content` 处理 UTF-8 文件**：Windows PowerShell 5.1
   会按 GBK 解码，中文注释变乱码、还可能把忽略规则吃掉（本项目真发生过：`pages/` 那行被并进注释，
   导致 4 个产物被误加进 git 索引）。
