@@ -518,6 +518,34 @@ agent 收到后会用 `read_file` 按元素标识定位、用 `edit_page` 做最
 
 ## 目录说明
 
+```
+agent/
+├── backend.py            FastAPI 服务与全部接口
+├── LCtext2.py            Agent 循环与本地工具定义
+├── multi_agent.py        Planner / Executor / Judge 闭环
+├── knowledge_base.py     RAG 管道与检索工具
+├── utils.py              公共工具（路径安全、文本/PDF 提取、上下文压缩…）
+├── workspaces.py         工作区登记与切换
+├── page_tool.py          页面制作工具（create_page / edit_page / list_pages）
+├── file_tool.py          文件读写工具（write_file / edit_file）
+├── shell_tool.py         命令行工具（run_shell）
+├── code_executor_tool.py 代码执行工具（子进程管理端）
+├── _exec_worker.py       代码执行子进程（勿改名/勿移动）
+├── frontend/             前端静态资源（本地 vendor，离线可用）
+│   ├── index.html  script.js  styles.css  picker.js
+│   └── vendor/           Vue / marked / DOMPurify / KaTeX / highlight.js / 字体
+├── docs/
+│   └── PROJECT_LAYOUT.md 文件分类与存放约定（新增文件该放哪看这里）
+├── requirements.txt      依赖清单
+├── kb_requirements.txt   知识库文档解析依赖（被 requirements.txt 引用）
+├── .env.example          环境变量模板
+├── .gitignore
+├── README.md
+│
+├── uploads/  pang/  knowledge_base/  pages/  .tasks/  .workspaces/   ← 运行时数据（已忽略）
+└── _local/                                                            ← 本机私有资料（已忽略）
+```
+
 | 路径 | 说明 |
 |---|---|
 | `backend.py` | FastAPI 服务与全部 HTTP 接口 |
@@ -528,17 +556,16 @@ agent 收到后会用 `read_file` 按元素标识定位、用 `edit_page` 做最
 | `shell_tool.py` | 命令行执行工具 `run_shell`（bash / PowerShell） |
 | `page_tool.py` | 页面制作工具 `create_page` / `edit_page` / `list_pages` |
 | `workspaces.py` | 工作区登记/切换、本机目录浏览与新建文件夹 |
-| `.workspaces/registry.json` | 工作区登记表（刻意放在应用目录，不放工作区里；已 git 忽略，含本机路径） |
 | `utils.py` | 公共工具 |
-| `requirements.txt` | 依赖清单（含可选分组说明） |
-| `kb_requirements.txt` | 知识库的文档解析依赖，被 `requirements.txt` 引用 |
-| `.env.example` | 环境变量模板（复制成 `.env` 使用） |
+| `docs/PROJECT_LAYOUT.md` | **文件分类与存放约定**：每个文件干什么、新文件该放哪、哪些目录不能挪 |
 | `frontend/` | 前端静态资源，由后端挂载 |
 | `frontend/picker.js` | 预览页里的元素选取器（仅在「编辑页面」模式下由后端注入） |
 | `frontend/vendor/` | 本地化的第三方前端库与字体 |
-| `uploads/` | 用户上传文件（已 git 忽略） |
-| `pang/` | 生成的图表（已 git 忽略） |
-| `<工作区>/pages/` | Agent 生成的页面（跟着工作区走；工作区就是应用目录时位于 `./pages/`，已 git 忽略） |
+| `requirements.txt` / `kb_requirements.txt` | 依赖清单（后者被前者引用） |
+| `.env.example` | 环境变量模板（复制成 `.env` 使用） |
+| `uploads/` / `pang/` / `knowledge_base/` / `pages/` / `.tasks/` | 运行时数据，**启动时会自动重建，但不要移动目录本身**（移动会导致应用认不到已有数据） |
+| `.workspaces/registry.json` | 工作区登记表（刻意放在应用目录，不放工作区里；含本机路径，已忽略） |
+| `_local/` | 本机私有资料：`reference/` 参考文档、`legacy/` 早期示例与废弃代码、`old-charts/` 历史图表。已忽略，不随仓库发布 |
 
-> `tests/`、`examples/`、`deprecated/` 是早期 `hello_agents` 示例与废弃代码，
-> 与当前实现无关，**不随仓库发布**（已加入 `.gitignore`，仅保留在开发者本机）。
+完整的分类原则、每类文件的职责、以及「新增文件放哪」的决策表见
+**[docs/PROJECT_LAYOUT.md](docs/PROJECT_LAYOUT.md)**。

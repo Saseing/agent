@@ -37,15 +37,10 @@ env/
 .DS_Store
 Thumbs.db
 
-# ── 非源码资料 ───────────────────────────────────────────────────────────────
-# 这份手册按仓库所有者的要求不随仓库发布（第三方资料可能涉及版权）。
-# 若确认可以公开，删掉下面这行即可。
-NLP_Architecture_Comparison_Handbook.pdf
-
-# ── 早期示例与废弃代码（不随仓库发布，文件仍保留在本机）─────────────────────
-# tests/ 里是引用 hello_agents（本项目并未安装的包）的旧脚本和一个空文件，
-# examples/ 是排序算法 demo，deprecated/ 是废弃的图表工具，均与当前实现无关。
-# 将来要写真正的测试时，把下面的 tests/ 那行删掉即可。
-tests/
-examples/
-deprecated/
+# ── 本机私有资料（不随仓库发布）──────────────────────────────────────────────
+# 只属于这台机器的东西统一收进 _local/，工作目录保持干净：
+#   _local/reference/   参考文档（第三方手册等，可能涉及版权）
+#   _local/legacy/      早期 hello_agents 示例与废弃代码（原 tests/ examples/ deprecated/）
+#   _local/old-charts/  历史生成的图表（保留着，因为旧会话里的图片附件仍指向它们）
+# 注：将来要写真正的测试，新建 tests/ 后把本行删掉即可（_local/legacy/tests 是旧的、无关的）。
+_local/
