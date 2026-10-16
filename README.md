@@ -5,28 +5,54 @@
 
 > 本 README 早前描述的是 `hello_agents` 教程 demo，与实际代码不符，已按当前实现重写。
 
+仓库：<https://github.com/Saseing/agent>
+
 ## 快速开始
 
-项目依赖安装在**同级目录的 venv** 中（`D:\python_text\.venv`），不在项目内：
+### 从零跑起来（克隆 → 安装 → 配置 → 启动）
 
 ```powershell
-cd D:\python_text\NewAgent
-D:\python_text\.venv\Scripts\python.exe backend.py
+# 1) 克隆
+git clone https://github.com/Saseing/agent.git
+cd agent
+
+# 2) 建虚拟环境并装依赖（首次约 5~10 分钟，torch 较大）
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+
+# 3) 配置密钥
+Copy-Item .env.example .env
+notepad .env            # 至少填 OPENAI_API_KEY；换厂商时同时改 LLM_BASE_URL 与 LLM_MODEL
+
+# 4) 启动
+python backend.py
 ```
 
 打开 <http://127.0.0.1:8001> 即可使用。
 
-> ⚠️ 不要直接用 `python backend.py`。PATH 上的 `python` 通常是 Windows Store
-> 占位符，缺少 fastapi/langchain 等依赖。请使用上面 venv 里的解释器。
+**只想先跑起来、不装向量检索那套重的？** 可以跳过 `requirements.txt` 里
+「知识库：向量检索」那一段（chromadb / transformers / torch 等）—— 应用照常启动，
+只是嵌入后端会自动降级为离线哈希嵌入，检索质量下降。知识库用不上就无所谓。
+
+> ⚠️ 别用 PATH 上的 `python`。Windows 下它常是应用商店占位符，缺 fastapi/langchain
+> 等依赖；请用虚拟环境里的解释器（`.\.venv\Scripts\python.exe backend.py`）。
+>
+> 本项目的开发环境把 venv 放在**项目同级目录**（`D:\python_text\.venv`），
+> 所以开发时用的是 `D:\python_text\.venv\Scripts\python.exe backend.py`。
+> 你若按上面步骤在项目内建 `.venv`，用哪个都行。
 
 ### 环境变量（`.env`）
 
+完整模板见 [`.env.example`](.env.example)（复制成 `.env` 再填值，`.env` 已被 git 忽略）。
+最常用的几项：
+
 ```env
-OPENAI_API_KEY=...                 # 通义千问 / DashScope 密钥
-LLM_MODEL=qwen-plus
-LLM_TEMPERATURE=0.7
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-TAVILY_API_KEY=...                 # 联网搜索
+OPENAI_API_KEY=...                 # 当前 LLM_BASE_URL 对应服务的密钥（变量名沿用 OpenAI 的叫法）
+LLM_MODEL=deepseek-chat
+LLM_TEMPERATURE=1
+LLM_BASE_URL=https://api.deepseek.com
+TAVILY_API_KEY=...                 # 联网搜索（可选）
 
 # 可选
 HOST=127.0.0.1                     # 默认仅回环；设为 0.0.0.0 才会对局域网开放
@@ -502,13 +528,17 @@ agent 收到后会用 `read_file` 按元素标识定位、用 `edit_page` 做最
 | `shell_tool.py` | 命令行执行工具 `run_shell`（bash / PowerShell） |
 | `page_tool.py` | 页面制作工具 `create_page` / `edit_page` / `list_pages` |
 | `workspaces.py` | 工作区登记/切换、本机目录浏览与新建文件夹 |
-| `.workspaces/registry.json` | 工作区登记表（刻意放在应用目录，不放工作区里） |
+| `.workspaces/registry.json` | 工作区登记表（刻意放在应用目录，不放工作区里；已 git 忽略，含本机路径） |
 | `utils.py` | 公共工具 |
+| `requirements.txt` | 依赖清单（含可选分组说明） |
+| `kb_requirements.txt` | 知识库的文档解析依赖，被 `requirements.txt` 引用 |
+| `.env.example` | 环境变量模板（复制成 `.env` 使用） |
 | `frontend/` | 前端静态资源，由后端挂载 |
 | `frontend/picker.js` | 预览页里的元素选取器（仅在「编辑页面」模式下由后端注入） |
 | `frontend/vendor/` | 本地化的第三方前端库与字体 |
-| `uploads/` | 用户上传文件 |
-| `pang/` | 生成的图表 |
-| `<工作区>/pages/` | Agent 生成的页面（跟着工作区走；工作区就是应用目录时位于 `./pages/`） |
-| `deprecated/` | 历史遗留代码，未被引用 |
-| `tests/`, `examples/` | 早期 `hello_agents` 示例，与当前实现无关 |
+| `uploads/` | 用户上传文件（已 git 忽略） |
+| `pang/` | 生成的图表（已 git 忽略） |
+| `<工作区>/pages/` | Agent 生成的页面（跟着工作区走；工作区就是应用目录时位于 `./pages/`，已 git 忽略） |
+
+> `tests/`、`examples/`、`deprecated/` 是早期 `hello_agents` 示例与废弃代码，
+> 与当前实现无关，**不随仓库发布**（已加入 `.gitignore`，仅保留在开发者本机）。

@@ -1,0 +1,37 @@
+# 安装：pip install -r requirements.txt
+# 说明：版本下限取"本机验证可用"的版本；如需完全复现可把它们锁成 ==。
+
+# ── 核心运行依赖 ─────────────────────────────────────────────────────────────
+fastapi>=0.136
+uvicorn>=0.46
+python-multipart>=0.0.28    # FastAPI 处理文件上传，代码里不显式 import，缺了会在上传时报错
+python-dotenv>=1.2
+pydantic>=2.13
+
+# ── LLM 与工具调用 ───────────────────────────────────────────────────────────
+langchain-core>=1.4
+langchain-openai>=1.2       # 走 OpenAI 兼容协议，可对接 DeepSeek / DashScope 等
+langchain-tavily>=0.2.18    # 联网搜索工具 tavily_search（没有 TAVILY_API_KEY 时该工具不可用）
+
+# ── 代码执行与图表 ───────────────────────────────────────────────────────────
+numpy>=2.2
+matplotlib>=3.10
+IPython>=9.0                # _exec_worker.py 用它的 InteractiveShell 执行代码并捕获输出
+
+# ── 知识库：文档解析 ─────────────────────────────────────────────────────────
+-r kb_requirements.txt      # PyPDF2 / python-docx / openpyxl / python-pptx
+pymupdf>=1.28               # PDF 文本提取的主力方案（utils._extract_pdf_pymupdf）
+
+# ── 知识库：向量检索 ─────────────────────────────────────────────────────────
+# 这一组比较重（torch 尤其大）。**不装也能启动**：启动时嵌入后端会自动降级为
+# "离线哈希嵌入"（无语义能力，检索质量明显下降）。想用得舒服就装上。
+chromadb>=1.5
+transformers>=5.0           # 直接加载 text2vec 权重（比 sentence-transformers 稳，见 README「已知限制」）
+sentence-transformers>=5.0  # 备选后端，需经 utils.sentence_transformers_importable() 子进程探测后才启用
+torch>=2.9
+
+# ── 可选增强 ─────────────────────────────────────────────────────────────────
+# PDF 表格/备选解析策略。utils.py 里是惰性导入 + 多策略回退，缺了只是少一条路。
+pdfplumber>=0.11
+pdfminer.six>=20221105
+pypdf>=6.0
