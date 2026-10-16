@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>WorkEaser - AI 智能助理</title>
+    <!-- 依赖全部本地化到 vendor/，原因：
+         1) 离线/内网环境可用（此前 CDN 不可达会白屏，因为 marked.setOptions
+            在 createApp 之前抛错）
+         2) 锁定版本，避免上游变更导致接口失效
+         3) 不引入第三方域名，缩小供应链面
+         注意：highlight 回调在 marked >= 8 已被移除，故锁定 marked 12 并改用
+         highlight.js 手动高亮（见 script.js）。 -->
+    <link rel="stylesheet" href="vendor/fonts/fontawesome.min.css">
+    <link rel="stylesheet" href="vendor/github-dark.min.css">
+    <link rel="stylesheet" href="vendor/katex.min.css">
+    <link rel="stylesheet" href="styles.css">
+    <script src="vendor/dompurify.min.js"></script>
+    <script src="vendor/marked.min.js"></script>
+    <script src="vendor/katex.min.js"></script>
+    <script src="vendor/auto-render.min.js"></script>
+    <script src="vendor/highlight.min.js"></script>
+    <script src="vendor/vue.global.prod.js"></script>
+</head>
+<body>
+    <div id="app">
+        <div class="app-layout">
+            <div class="sidebar-overlay" :class="{open:sidebarOpen}" @click="sidebarOpen=false"></div>
+            <aside class="sidebar" :class="{open:sidebarOpen,collapsed:sidebarCollapsed}" :style="sidebarCollapsed?{width:'0px',minWidth:'0px'}:{width:sidebarWidth+'px',minWidth:sidebarWidth+'px'}">
+                <div class="sidebar-resize-handle" @mousedown.prevent="startResize"></div>
+                <div class="sidebar-header">
+                    <div class="sidebar-logo">&#x1f431;</div>
+                    <div>
+                        <h1>WorkEaser</h1>
+                        <span class="version">v2.0</span>
+                    </div>
+                </div>
+                <div class="sidebar-actions">
+                    <button class="new-chat-btn" @click="newChat">
+                        <i class="fa-solid fa-plus"></i> 新建对话
+                    </button>
+                    <button class="kb-btn" :class="{active:currentView==='knowledge'}" @click="openKnowledge">
+                        <i class="fa-solid fa-book-open"></i> 添加知识文档
+                    </button>
+                </div>
+
+                <!-- ── 工作区标题栏 ── -->
+                <div class="wsp-head">
+                    <span class="wsp-title">工作区</span>
+                    <div class="wsp-actions">
+                        <button class="wsp-btn" @click="convSearchOpen=!convSearchOpen"
+                                :class="{on:convSearchOpen||wsSearchActive}" title="搜索对话">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                        </button>
+                        <button class="wsp-btn" :class="{on:wsViewMenuOpen}"
+                                @click="openViewMenu($event)" title="视图选项">
+                            <i class="fa-solid fa-sliders"></i>
+                        </button>
+                        <button class="wsp-btn" @click="openWorkspacePicker" title="新建工作区">
+                            <i class="fa-solid fa-folder-plus"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 搜索框 -->
+                <div v-if="convSearchOpen" class="wsp-search">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <input ref="convSearchInput" v-model="convQuery"
+                           placeholder="搜索对话或工作区…" />
+                    <button v-if="wsSearchActive" class="wsp-search-clear"
+                            @click="convQuery=''" title="清除">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+
+                <!-- ── 工作区列表：每个工作区下面挂它自己的对话 ── -->
+                <div class="ws-list-wrap">
+                    <template v-for="row in sidebarRows" :key="row.key">
+
+                        <!-- 工作区行 -->
+                        <div v-if="row.kind==='ws'" class="wsg-head"
+                             :class="{active:row.ws.active}"
+                             @click="activateWorkspace(row.ws)">
+                            <i class="wsg-caret fa-solid"
+                               :class="row.ws.collapsed?'fa-caret-right':'fa-caret-down'"
+                               @click.stop="toggleWorkspace(row.ws.id)"></i>
+                            <i v-if="row.ws.kind==='files'" class="wsg-folder fa-solid fa-file-lines"></i>
+                            <i v-else class="wsg-folder fa-regular"
+                               :class="row.ws.collapsed?'fa-folder':'fa-folder-open'"></i>
+
+                            <template v-if="wsRenamingId===row.ws.id">
+                                <input class="wsg-rename" ref="wsRenameInput" v-model="wsRenameValue"
+                                       @click.stop @keydown.enter="confirmWsRename"
+                                       @keydown.esc="cancelWsRename" @blur="confirmWsRename" />
+                            </template>
+                            <template v-else>
+                                <span class="wsg-name" :title="row.ws.kind==='files' ? (row.ws.fileCount+' 个文件') : row.ws.path">{{row.ws.name}}</span>
+                                <span v-if="row.ws.kind!=='files' && !row.ws.exists" class="wsg-missing" title="目录已不存在">缺失</span>
+                                <span v-if="row.ws.kind==='files'" class="wsg-meta"
+                                      :title="row.ws.totalChars ? row.ws.totalChars.toLocaleString()+' 字符' : ''">
+                                    {{row.ws.fileCount}} 文件
+                                </span>
+                                <button class="wsg-add" @click.stop="newChatInWorkspace(row.ws)"
+                                        title="在此工作区新建会话">
+                                    <i class="fa-solid fa-plus"></i>
+                                </button>
+                                <button class="wsg-more" @click.stop="openWsMenu(row.ws.id,$event)" title="更多">
+                                    <i class="fa-solid fa-ellipsis"></i>
+                                </button>
+                            </template>
+                        </div>
+
+                        <!-- 会话行 -->
+                        <div v-else-if="row.kind==='session'" class="session-item-wrapper">
+                            <button class="session-item" :class="{active:row.session.id===sessionId}"
+                                    @click="switchSession(row.session.id)"
+                                    @contextmenu.prevent="toggleMenu(row.session.id,$event)"
+                                    :title="row.session.title||'未命名'">
+                                <i class="sess-icon fa-solid"
+                                   :class="row.session.pinned?'fa-thumbtack':'fa-comment'"
+                                   :style="row.session.pinned?'color:var(--accent);opacity:1':''"></i>
+                                <span class="sess-text">{{row.session.title||'未命名'}}</span>
+                                <span class="sess-time">{{relTime(row.session.updatedAt||row.session.createdAt)}}</span>
+                            </button>
+                            <button class="sess-more" @click.stop="toggleMenu(row.session.id,$event)" title="更多">
+                                <i class="fa-solid fa-ellipsis"></i>
+                            </button>
+                        </div>
+
+                        <!-- 空态 -->
+                        <div v-else-if="row.kind==='empty'" class="wsg-empty">{{row.text}}</div>
+
+                        <!-- 显示更多 / 收起 -->
+                        <button v-else-if="row.kind==='more'" class="wsg-more-row"
+                                @click.stop="revealMore(row.ws.id)">
+                            <i class="fa-solid fa-chevron-down"></i>{{row.label}}
+                        </button>
+                        <button v-else-if="row.kind==='less'" class="wsg-more-row"
+                                @click.stop="revealLess(row.ws.id)">
+                            <i class="fa-solid fa-chevron-up"></i>{{row.label}}
+                        </button>
+                    </template>
+
+                    <!-- 已归档的会话 -->
+                    <div v-if="wsShowArchived && archivedSessions.length" class="wsg-archived-head">
+                        <i class="fa-solid fa-box-archive"></i>已归档
+                        <span class="wsg-archived-count">{{archivedSessions.length}}</span>
+                    </div>
+                    <div v-for="s in (wsShowArchived ? archivedSessions : [])"
+                         :key="'a-'+s.id" class="session-item-wrapper archived">
+                        <button class="session-item" @click="switchSession(s.id)" :title="s.title">
+                            <i class="fa-solid fa-box-archive sess-icon"></i>
+                            <span class="sess-text">{{s.title||'未命名'}}</span>
+                            <span class="sess-time">{{relTime(s.createdAt)}}</span>
+                        </button>
+                        <button class="sess-more" @click.stop="toggleArchive(s)" title="取消归档">
+                            <i class="fa-solid fa-rotate-left"></i>
+                        </button>
+                    </div>
+
+                    <!-- 没有任何工作区 -->
+                    <div v-if="!workspaces.list.length" class="wsp-empty">
+                        <i class="fa-regular fa-folder-open"></i>
+                        <div class="wsp-empty-title">还没有工作区</div>
+                        <div class="wsp-empty-desc">选择一个本机文件夹作为工作区，会话会按工作区分别保存</div>
+                        <button class="wsp-empty-btn" @click="openWorkspacePicker">
+                            <i class="fa-solid fa-plus"></i> 新建工作区
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 视图选项菜单 -->
+                <div v-if="wsViewMenuOpen" class="session-menu view-menu"
+                     :style="wsViewMenuPos" @click.stop>
+                    <div class="session-menu-label">排序方式</div>
+                    <button class="session-menu-item"
+                            :class="{on:wsOrderBy==='updated'}"
+                            @click="wsOrderBy='updated';wsViewMenuOpen=false">
+                        <i class="fa-solid fa-check" :style="wsOrderBy==='updated'?'':'visibility:hidden'"></i>最近更新
+                    </button>
+                    <button class="session-menu-item"
+                            :class="{on:wsOrderBy==='manual'}"
+                            @click="wsOrderBy='manual';wsViewMenuOpen=false">
+                        <i class="fa-solid fa-check" :style="wsOrderBy==='manual'?'':'visibility:hidden'"></i>手动排序
+                    </button>
+                    <div class="session-menu-sep"></div>
+                    <div class="session-menu-label">筛选会话</div>
+                    <button class="session-menu-item" @click="wsShowArchived=!wsShowArchived;wsViewMenuOpen=false">
+                        <i class="fa-solid" :class="wsShowArchived?'fa-square-check':'fa-square'"></i>
+                        {{wsShowArchived?'隐藏已归档':'显示已归档'}}
+                    </button>
+                </div>
+
+                <!-- 工作区操作菜单 -->
+                <div v-if="wsMenuFor" class="session-menu" :style="wsMenuPos" @click.stop>
+                    <button class="session-menu-item" @click="startWsRename(workspaces.list.find(w=>w.id===wsMenuFor))">
+                        <i class="fa-solid fa-pen"></i>重命名
+                    </button>
+                    <button class="session-menu-item" @click="activateWorkspace(workspaces.list.find(w=>w.id===wsMenuFor));wsMenuFor=null">
+                        <i class="fa-solid fa-arrow-right-to-bracket"></i>设为当前
+                    </button>
+                    <button class="session-menu-item danger" @click="removeWorkspace(workspaces.list.find(w=>w.id===wsMenuFor))">
+                        <i class="fa-solid fa-trash"></i>移除
+                    </button>
+                </div>
+
+                <div class="sidebar-footer">
+                    <button class="footer-btn" @click="openSettings" title="设置">
+                        <i class="fa-solid fa-gear"></i><span>设置</span>
+                    </button>
+                    <span class="info">{{sessions.length}} 个对话</span>
+                    <button class="theme-toggle" @click="toggleTheme" :title="isDark?'切换浅色模式':'切换深色模式'">
+                        <i :class="isDark?'fa-solid fa-sun':'fa-solid fa-moon'"></i>
+                    </button>
+                </div>
+            </aside>
+            <main class="chat-main">
+                <template v-if="currentView==='chat'">
+                    <div class="chat-header">
+                        <!-- 顶部导航左侧：打开/收起左侧边栏 -->
+                        <button class="icon-btn side-toggle" :class="{active:leftSidebarOpen}"
+                                @click="toggleLeftSidebar"
+                                :title="leftSidebarOpen ? '收起侧边栏' : '打开侧边栏'">
+                            <i class="fa-solid fa-table-columns"></i>
+                        </button>
+                        <div class="chat-header-info">
+                            <div class="chat-header-title">{{currentTitle}}</div>
+                            <div class="chat-header-sub">
+                                <span class="scope-chip" :title="currentScope||'整个工作区'">
+                                    <i class="fa-solid" :class="currentScope ? (/\.\w+$/.test(currentScope)?'fa-file-lines':'fa-folder') : 'fa-folder-tree'"></i>
+                                    {{currentScopeLabel}}
+                                </span>
+                                <template v-if="isLoading">
+                                    <i class="fa-solid fa-circle-notch fa-spin"></i> {{loadingLabel}}
+                                </template>
+                                <template v-else>{{messages.length}} 条消息</template>
+                            </div>
+                        </div>
+                        <!-- 顶部导航右侧：打开/收起右侧栏 + 新对话 -->
+                        <div class="chat-header-actions">
+                            <button class="icon-btn side-toggle" :class="{active:rightPanelOpen}"
+                                    @click="toggleRightSidebar"
+                                    :title="rightPanelOpen ? '收起侧边栏' : '打开侧边栏'">
+                                <i class="fa-solid fa-table-columns icon-flip"></i>
+                            </button>
+                            <button class="icon-btn primary" @click="newChat" title="新对话">
+                                <i class="fa-solid fa-plus"></i>
+                            </button>
+                        </div>
+                    </div>
+                        <div class="messages-container" ref="messagesContainer" :style="{'--chat-font-size': settings.fontSize+'px'}">
+                        <div v-if="messages.length===0" class="empty-state">
+                            <div class="empty-icon"><i class="fa-regular fa-message"></i></div>
+                            <div class="empty-title">有什么我可以帮你的？</div>
+                            <div class="empty-desc">我可以帮你写代码、分析数据、阅读文件、生成图表，以及更多</div>
+                            <div class="empty-suggestions">
+                                <span class="suggestion-chip" @click="quickPrompt('帮我写一个Python快速排序算法')">
+                                    <i class="fa-solid fa-code" style="margin-right:4px"></i> 写代码
+                                </span>
+                                <span class="suggestion-chip" @click="quickPrompt('读取当前目录下的文件并分析')">
+                                    <i class="fa-solid fa-file-lines" style="margin-right:4px"></i> 分析文件
+                                </span>
+                                <span class="suggestion-chip" @click="quickPrompt('画一张折线图展示数据趋势')">
+                                    <i class="fa-solid fa-chart-line" style="margin-right:4px"></i> 生成图表
+                                </span>
+                                <span class="suggestion-chip" @click="quickPrompt('帮我规划一个项目的任务列表')">
+                                    <i class="fa-solid fa-list-check" style="margin-right:4px"></i> 任务规划
+                                </span>
+                            </div>
+                        </div>
+                        <div class="msg-scroll-inner" v-if="messages.length>0">
+                            <div v-for="(msg,idx) in messages" :key="msg._key||idx">
+                                <div v-if="msg.isUser" class="message user">
+                                    <div class="msg-body">
+                                        <!-- 该条消息引用了哪些元素（元素标签回显） -->
+                                        <div v-if="msg.userPicks&&msg.userPicks.length>0" class="user-picks">
+                                            <span v-for="(p,pi) in msg.userPicks" :key="'up'+pi" class="pick-tag"
+                                                  :title="p.page + ' · ' + p.label + ' · ' + p.width + ' × ' + p.height + (p.text ? ' · 文字：' + p.text : '')">
+                                                <span class="pick-tag-label">{{p.label}}</span>
+                                                <span class="pick-tag-size">{{p.width}} × {{p.height}}</span>
+                                                <span class="pick-tag-page">{{p.page}}</span>
+                                            </span>
+                                        </div>
+                                        <div class="msg-bubble" v-html="renderMarkdown(msg.text)"></div>
+                                        <div v-if="msg.userAtts&&msg.userAtts.length>0" class="user-attachments">
+                                            <img v-for="(a,ai) in msg.userAtts.filter(x=>x.type==='image')" :key="'ua'+ai" :src="a.content" :alt="a.name" class="user-attach-image" @click="previewImage(a.content)" />
+                                            <div v-for="(a,ai) in msg.userAtts.filter(x=>x.type!=='image')" :key="'uf'+ai" class="user-attach-file">
+                                                <i class="fa-solid fa-file"></i>
+                                                <span>{{a.name}}</span>
+                                            </div>
+                                        </div>
+                                        <div class="msg-time">{{msg.time||''}}</div>
+                                    </div>
+                                </div>
+                                <div v-else class="message bot">
+                                    <div class="msg-body">
+                                        <div v-if="(msg.thinkings&&msg.thinkings.length>0)||(msg.traceGroups&&msg.traceGroups.length>0)||(msg.workflowSteps&&msg.workflowSteps.length>0)" class="workflow-panel">
+                                            <div class="workflow-title" @click="msg.traceCollapsed=!msg.traceCollapsed">
+                                                <span class="wf-title-text">执行轨迹</span>
+                                                <span v-if="msg.traceTotalMs" class="wf-title-stats">
+                                                    <i class="fa-regular fa-clock"></i> {{(msg.traceTotalMs/1000).toFixed(1)}}s
+                                                    <template v-if="msg.traceToolTimeMs">
+                                                        · 工具 {{(msg.traceToolTimeMs/1000).toFixed(1)}}s
+                                                    </template>
+                                                </span>
+                                                <i class="fa-solid" :class="msg.traceCollapsed?'fa-chevron-right':'fa-chevron-down'" style="margin-left:auto;font-size:0.68rem;color:var(--text-muted)"></i>
+                                            </div>
+                                            <div class="workflow-body" :class="{collapsed:msg.traceCollapsed}">
+                                                <template v-if="msg.thinkings&&msg.thinkings.length>0">
+                                                    <div v-for="(tk,tki) in msg.thinkings" :key="'tk'+tki" class="thinking-group" :class="{done:tk.done,active:!tk.done}">
+                                                        <div class="tg-header thinking-group-header" @click="tk.collapsed=!tk.collapsed">
+                                                            <div class="tg-dot thinking-dot" :class="{done:tk.done}"><i class="fa-solid" :class="tk.done?'fa-lightbulb':'fa-circle-notch fa-spin'"></i></div>
+                                                            <div class="tg-label">
+                                                                <span v-if="(msg.traceGroups&&msg.traceGroups.length>0)||tki>0">第 {{tki+1}} 轮 · </span>
+                                                                AI 思考{{tk.done?'完成':'中'}}
+                                                            </div>
+                                                            <span v-if="tk.duration>0" class="tg-duration">{{tk.duration}}s</span>
+                                                            <i class="fa-solid fa-chevron-down tg-arrow" :class="{spin:!tk.done,collapsed:tk.collapsed}" style="margin-left:auto;font-size:0.65rem;color:var(--text-muted)"></i>
+                                                        </div>
+                                                        <div class="tg-tools thinking-tools" :class="{collapsed:tk.collapsed}">
+                                                            <div class="thinking-content" v-html="renderMarkdown(tk.text||'')"></div>
+                                                            <span v-if="!tk.done" class="thinking-cursor"></span>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                                <template v-if="msg.traceGroups&&msg.traceGroups.length>0">
+                                                    <div v-for="(group,gi) in msg.traceGroups" :key="'g'+gi" class="trace-group">
+                                                        <div class="tg-header">
+                                                            <div class="tg-dot" :class="group.status"></div>
+                                                            <div class="tg-label">{{group.label}}</div>
+                                                            <span v-if="group.durationMs" class="tg-duration">{{group.durationMs<1000?group.durationMs+'ms':(group.durationMs/1000).toFixed(1)+'s'}}</span>
+                                                            <span v-else-if="group.status==='running'" class="tg-running-dot"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
+                                                        </div>
+                                                        <div class="tg-tools">
+                                                            <div v-for="(tool,ti) in group.tools" :key="'t'+ti" class="tg-tool" :class="tool.status">
+                                                                <div class="tt-icon">
+                                                                    <i v-if="tool.icon && tool.icon.length>2">{{tool.icon}}</i>
+                                                                    <i v-else class="fa-solid" :class="tool.status==='done'?'fa-check':'fa-circle-notch fa-spin'"></i>
+                                                                </div>
+                                                                <div class="tt-body">
+                                                                    <div class="tt-row">
+                                                                        <span class="tt-name">{{tool.label}}</span>
+                                                                        <span v-if="tool.argsSummary" class="tt-args">{{tool.argsSummary}}</span>
+                                                                        <span v-if="tool.durationMs" class="tt-duration">{{tool.durationMs<1000?tool.durationMs+'ms':(tool.durationMs/1000).toFixed(1)+'s'}}</span>
+                                                                    </div>
+                                                                    <div v-if="tool.description && tool.status==='running'" class="tt-desc">{{tool.description}}</div>
+                                                                    <div v-if="tool.resultPreview && tool.status==='done'" class="tt-result">{{tool.resultPreview}}</div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <!-- 总体统计 -->
+                                                    <div v-if="msg.traceTotalMs" class="trace-stats">
+                                                        <div class="ts-item">
+                                                            <div class="ts-label">总耗时</div>
+                                                            <div class="ts-value primary">{{msg.traceTotalMs<1000?msg.traceTotalMs+'ms':(msg.traceTotalMs/1000).toFixed(1)+'s'}}</div>
+                                                        </div>
+                                                        <div v-if="msg.traceToolCalls && msg.traceToolCalls.length>0" class="ts-item">
+                                                            <div class="ts-label">工具调用</div>
+                                                            <div class="ts-value">{{msg.traceToolCalls.length}} 次</div>
+                                                        </div>
+                                                        <div v-if="msg.traceToolTimeMs" class="ts-item">
+                                                            <div class="ts-label">工具耗时</div>
+                                                            <div class="ts-value">{{(msg.traceToolTimeMs/msg.traceTotalMs*100).toFixed(0)}}%</div>
+                                                        </div>
+                                                        <div v-if="msg.traceLlmTimeMs" class="ts-item">
+                                                            <div class="ts-label">推理耗时</div>
+                                                            <div class="ts-value">{{(msg.traceLlmTimeMs/msg.traceTotalMs*100).toFixed(0)}}%</div>
+                                                        </div>
+                                                    </div>
+                                                </template>
+
+                                                <!-- 兼容旧 workflowSteps 显示 -->
+                                                <template v-else-if="msg.workflowSteps&&msg.workflowSteps.length>0">
+                                                    <div class="workflow-steps">
+                                                        <div v-for="(step,si) in msg.workflowSteps" :key="'ws'+si" class="workflow-step" :class="step.status">
+                                                            <div class="wf-step-icon">
+                                                                <span v-if="step.icon">{{step.icon}}</span>
+                                                                <i v-else class="fa-solid" :class="step.status==='done'?'fa-check-circle':step.status==='running'?'fa-circle-notch fa-spin':'fa-circle'"></i>
+                                                            </div>
+                                                            <div class="wf-step-content">
+                                                                <div class="wf-step-header">
+                                                                    <span class="wf-step-label">{{step.label}}</span>
+                                                                    <span v-if="step.argsSummary" class="wf-step-args">{{step.argsSummary}}</span>
+                                                                    <span v-if="step.durationMs" class="wf-step-duration">{{step.durationMs<1000?step.durationMs+'ms':(step.durationMs/1000).toFixed(1)+'s'}}</span>
+                                                                </div>
+                                                                <div v-if="step.description&&step.status==='running'" class="wf-step-desc">{{step.description}}...</div>
+                                                                <div v-if="step.resultPreview&&step.status==='done'" class="wf-step-result">{{step.resultPreview}}</div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+                                        <div v-else-if="msg.toolStatus==='thinking'" class="tool-indicator">
+                                            <div class="tool-spinner"></div>
+                                            <span>AI 正在思考...</span>
+                                        </div>
+                                        <div v-else-if="msg.toolStatus==='calling'" class="tool-status-text">
+                                            <i class="fa-solid fa-screwdriver-wrench fa-spin" style="color:var(--accent)"></i>
+                                            <span>正在调用工具...</span>
+                                        </div>
+                                        <div v-else-if="msg.toolName" class="tool-status-text">
+                                            <span class="tool-badge">{{msg.toolName}}</span>
+                                            <span>{{msg.toolResult}}</span>
+                                        </div>
+                                        <div v-if="msg.text||msg.streaming" class="msg-bubble" @click="onBubbleClick">
+                                            <span v-html="renderMarkdown(msg.text)"></span>
+                                            <span v-if="msg.streaming" class="streaming-cursor"></span>
+                                        </div>
+                                        <div v-if="msg.attachments&&((msg.attachments.images&&msg.attachments.images.length>0)||(msg.attachments.files&&msg.attachments.files.length>0))" class="attachments">
+                                            <div class="attachments-title"><i class="fa-solid fa-paperclip"></i> 附件</div>
+                                            <div class="attachments-grid">
+                                                <img v-for="img in (msg.attachments.images||[])" :key="img.filename" :src="API+img.url" :alt="img.filename" class="attach-image" @click="previewImage(API+img.url)" onerror="this.style.opacity=0.3;this.style.display='none'" />
+                                                <!-- 文件行占满正文宽度：图标徽章 + 文件名（过长省略） + 大小 + 打开 -->
+                                                <template v-for="f in (msg.attachments.files||[])" :key="f.filename">
+                                                    <a v-if="f.url" :href="API+f.url" class="attach-file" target="_blank"
+                                                       :title="'打开 ' + f.filename">
+                                                        <span class="attach-file-icon"><i :class="fileIcon(f.filename)"></i></span>
+                                                        <span class="attach-file-name">{{f.filename}}</span>
+                                                        <span v-if="f.size" class="attach-file-size">{{formatSize(f.size)}}</span>
+                                                        <i class="fa-solid fa-arrow-up-right-from-square attach-file-go"></i>
+                                                    </a>
+                                                    <span v-else class="attach-file static"
+                                                          :title="f.filename + '（该位置没有可访问的地址）'">
+                                                        <span class="attach-file-icon"><i :class="fileIcon(f.filename)"></i></span>
+                                                        <span class="attach-file-name">{{f.filename}}</span>
+                                                        <span v-if="f.size" class="attach-file-size">{{formatSize(f.size)}}</span>
+                                                    </span>
+                                                </template>
+                                            </div>
+                                        </div>
+                                        <div v-if="!msg.streaming&&msg.text" class="msg-actions">
+                                            <button class="msg-action-btn" :class="{copied:msg._copied}" @click="copyMessage(msg)">
+                                                <i :class="msg._copied?'fa-solid fa-check':'fa-regular fa-copy'"></i>
+                                            </button>
+                                        </div>
+                                        <div class="msg-time">{{msg.time||''}}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="input-area" @dragover.prevent="dragOver=true" @dragleave.prevent="dragOver=false" @drop.prevent="onDrop">
+                        <div class="input-wrapper">
+                            <!-- 元素标签（预览面板里点选元素产生）：可多个并存、可单独删除，
+                                 发送时转成文本块交给 agent，输入框留给「修改要求」 -->
+                            <div v-if="pagePicks.length>0" class="input-file-info pick-info">
+                                <span class="pick-info-label">
+                                    <i class="fa-solid fa-arrow-pointer"></i> 元素标签 {{pagePicks.length}}
+                                    <span v-if="pagePicks.length>1" class="pick-clear" @click="clearPicks"
+                                          title="清空全部元素标签">清空</span>
+                                </span>
+                                <span v-for="p in pagePicks" :key="p.id" class="pick-tag"
+                                      :title="p.page + ' · ' + p.label + ' · ' + p.width + ' × ' + p.height + (p.text ? ' · 文字：' + p.text : '')">
+                                    <span class="pick-tag-label">{{p.label}}</span>
+                                    <span class="pick-tag-size">{{p.width}} × {{p.height}}</span>
+                                    <span class="pick-tag-page">{{p.page}}</span>
+                                    <span class="file-tag-del" @click="removePick(p.id)" title="移除该元素标签">&times;</span>
+                                </span>
+                            </div>
+                            <div v-if="fileContents.length>0" class="input-file-info">
+                                <template v-for="(f,fi) in fileContents" :key="fi">
+                                    <div v-if="f.type==='image'" class="input-img-preview">
+                                        <img :src="f.content" :alt="f.name" />
+                                        <button class="input-img-del" @click="removeFile(fi)" title="移除">&times;</button>
+                                        <span class="input-img-name">{{f.name}}<span v-if="f.size" class="input-img-size"> · {{formatSize(f.size)}}</span></span>
+                                    </div>
+                                    <span v-else class="file-tag">
+                                        <i class="fa-solid fa-file"></i> {{f.name}}
+                                        <span class="file-tag-del" @click="removeFile(fi)">&times;</span>
+                                    </span>
+                                </template>
+                            </div>
+                            <div class="input-box">
+                                <textarea ref="chatInput" v-model="userInput" @keydown.enter.exact.prevent="sendMessage" placeholder="输入消息... (Enter 发送, Shift+Enter 换行, Ctrl+V 粘贴图片)" :disabled="isLoading" @input="autoResize" @paste="onPaste"></textarea>
+                                <div class="input-actions">
+                                    <button class="input-btn" @click="triggerFileUpload" title="上传文件/图片">
+                                        <i class="fa-solid fa-paperclip"></i>
+                                        <span v-if="fileContents.length>0" class="file-count-badge">{{fileContents.length}}</span>
+                                    </button>
+                                    <input type="file" ref="fileInput" multiple accept="image/*,.py,.js,.html,.css,.json,.md,.txt,.csv,.xml,.yaml,.yml,.java,.ts,.rs,.go,.c,.cpp,.h,.sql,.sh,.bat,.env" style="display:none" @change="onFileSelected" />
+                                    <button class="input-btn send-btn" v-if="!isLoading" @click="sendMessage" :disabled="!userInput.trim()&&fileContents.length===0&&pagePicks.length===0">
+                                        <i class="fa-solid fa-arrow-up"></i>
+                                    </button>
+                                    <button class="input-btn stop-btn" v-else @click="stopGeneration" title="终止生成">
+                                        <i class="fa-solid fa-stop"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="input-hint">Enter 发送 · Shift+Enter 换行 · 支持拖拽文件/图片上传</div>
+                        </div>
+                        <div v-if="dragOver" class="drag-overlay">
+                            <div class="drag-overlay-inner">
+                                <i class="fa-solid fa-cloud-arrow-up"></i>
+                                <div>松开以上传文件</div>
+                            </div>
+                        </div>
+                    </div><!-- /.input-area -->
+                </template>
+                <template v-else-if="currentView==='knowledge'">
+                    <div class="kb-page">
+                        <div class="kb-header">
+                            <button class="icon-btn" @click="currentView='chat'" title="返回对话">
+                                <i class="fa-solid fa-arrow-left"></i>
+                            </button>
+                            <div>
+                                <div class="kb-title">知识库管理</div>
+                                <div class="kb-sub">上传文档，AI 将根据文档内容回答问题</div>
+                            </div>
+                        </div>
+                        <div class="kb-body">
+                            <div class="kb-content">
+                                <div class="kb-drop-zone" :class="{dragover:kbDragOver}" @click="$refs.kbFileInput.click()" @dragover.prevent="kbDragOver=true" @dragleave.prevent="kbDragOver=false" @drop.prevent="onKbDrop">
+                                    <div class="kb-drop-icon"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+                                    <div class="kb-drop-title">上传知识文档</div>
+                                    <div class="kb-drop-desc">支持 PDF、Word、Excel、PPT、TXT、Markdown、图片等格式</div>
+                                    <button class="kb-browse-btn" @click.stop="$refs.kbFileInput.click()">选择文件</button>
+                                    <input type="file" ref="kbFileInput" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,.html,.htm,.xml,.yaml,.yml,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg" style="display:none" @change="onKbFileSelected" />
+                                </div>
+                                <div class="kb-docs-title">
+                                    <span>我的文档</span>
+                                    <span class="kb-doc-count">{{kbDocuments.length}} 个文档</span>
+                                </div>
+                                <div v-if="kbDocuments.length===0" class="kb-empty">暂无文档，上传文件开始构建知识库</div>
+                                <div v-else class="kb-docs-grid">
+                                    <div v-for="doc in kbDocuments" :key="doc.id" class="kb-doc-card">
+                                        <div class="kb-doc-icon" :class="getDocIconClass(doc.filename)">
+                                            <i :class="getDocIcon(doc.filename)"></i>
+                                        </div>
+                                        <div class="kb-doc-name" :title="doc.filename">{{doc.filename}}</div>
+                                        <div class="kb-doc-meta">{{formatSize(doc.size)}} · {{formatDate(doc.uploadedAt)}}</div>
+                                        <div class="kb-doc-actions">
+                                            <button class="kb-doc-btn" @click="viewDoc(doc)"><i class="fa-solid fa-eye"></i> 预览</button>
+                                            <button class="kb-doc-btn danger" @click="deleteDoc(doc)"><i class="fa-solid fa-trash"></i> 删除</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="kbViewDoc" class="kb-viewer" @click.self="kbViewDoc=null">
+                        <div class="kb-viewer-box">
+                            <div class="kb-viewer-header">
+                                <div class="kb-viewer-title">{{kbViewDoc.filename}}</div>
+                                <button class="kb-viewer-close" @click="kbViewDoc=null">&times;</button>
+                            </div>
+                            <div class="kb-viewer-body" v-if="kbViewDoc.content">{{kbViewDoc.content}}</div>
+                            <div class="kb-viewer-body" v-else style="text-align:center;color:var(--text-muted)">无法预览此文件</div>
+                        </div>
+                    </div>
+                </template>
+            </main>
+            <!-- ── 右侧面板：页面预览 / 工作区文件（与对话并存）───────── -->
+            <aside class="right-panel" v-if="rightPanelOpen && currentView==='chat'" :style="{width:rightPanelWidth+'px'}">
+              <div class="rp-resize" @mousedown.prevent="startRightResize" title="拖动调整宽度"></div>
+              <div class="rp-head">
+                  <!-- 右栏内容入口：页面预览 / 查看工作区文件（居中切换） -->
+                  <div class="rp-switch">
+                      <button class="rp-switch-btn" :class="{active:rightPanelTab==='pages'}"
+                              @click="switchRightTab('pages')" title="页面预览">
+                          <i class="fa-solid fa-window-restore"></i> 页面预览
+                          <span v-if="pagesList.length" class="rp-tab-badge">{{pagesList.length}}</span>
+                      </button>
+                      <button class="rp-switch-btn" :class="{active:rightPanelTab==='files'}"
+                              @click="switchRightTab('files')" title="预览 / 查看工作区里的文件">
+                          <i class="fa-regular fa-folder-open"></i> 查看工作区文件
+                      </button>
+                  </div>
+                  <button class="rp-close" @click="rightPanelOpen=false" title="关闭面板 (Esc)">
+                      <i class="fa-solid fa-xmark"></i>
+                  </button>
+              </div>
+
+              <div class="rp-body">
+                  <!-- ① 页面预览 -->
+                  <template v-if="rightPanelTab==='pages'">
+                      <div class="rp-bar">
+                          <span class="rp-bar-text" :title="pagesDir">{{pagesWorkspaceLabel}}</span>
+                          <!-- 收起/展开页面列表：收起后预览区占满整栏高度 -->
+                          <button class="rp-icon-btn" :class="{active:!pagesListCollapsed}"
+                                  @click="togglePagesList"
+                                  :title="pagesListCollapsed
+                                      ? '展开页面列表（' + pagesList.length + ' 个）'
+                                      : '收起页面列表，让预览占满高度'">
+                              <i class="fa-solid" :class="pagesListCollapsed?'fa-chevron-down':'fa-chevron-up'"></i>
+                          </button>
+                          <button class="rp-icon-btn" @click="loadPages" :disabled="pagesLoading"
+                                  title="刷新页面列表">
+                              <i class="fa-solid fa-rotate" :class="{'fa-spin':pagesLoading}"></i>
+                          </button>
+                          <!-- 元素选取：像 DevTools 那样点选预览页里的元素，自动生成定位前缀 -->
+                          <button class="rp-icon-btn" :class="{active:pageEditMode}"
+                                  :disabled="!isPreviewablePage" @click="togglePageEditMode"
+                                  :title="pageEditMode ? '退出元素选取（Esc）' : '编辑页面：点选预览里的元素，自动在输入框生成定位前缀'">
+                              <i class="fa-solid fa-arrow-pointer"></i>
+                          </button>
+                          <button class="rp-icon-btn" :disabled="!canPreviewFrame" @click="openPageExternal"
+                                  title="在新窗口打开（不受预览沙箱限制，localStorage 等可用）">
+                              <i class="fa-solid fa-up-right-from-square"></i>
+                          </button>
+                      </div>
+                      <div v-if="pagesLoading && !pagesList.length" class="rp-hint">
+                          <i class="fa-solid fa-circle-notch fa-spin"></i> 读取中…
+                      </div>
+                      <div v-else-if="!pagesList.length" class="rp-empty">
+                          <i class="fa-regular fa-file-code"></i>
+                          <div class="rp-empty-title">还没有页面</div>
+                          <div class="rp-empty-desc">
+                              在对话里说「帮我做一个 XX 页面」，Agent 会把页面写进当前工作区的 pages/ 目录
+                          </div>
+                      </div>
+                      <template v-else>
+                          <div class="pages-list" v-show="!pagesListCollapsed">
+                              <button v-for="p in pagesList" :key="p.name" class="pages-item"
+                                      :class="{active:p.name===pagePreviewName, asset:!p.is_page}"
+                                      @click="previewPage(p)" :title="p.name">
+                                  <i class="fa-solid" :class="p.is_page?'fa-file-code':'fa-file'"></i>
+                                  <span class="pages-item-name">{{p.name}}</span>
+                                  <span class="pages-item-meta">{{formatSize(p.size)}}</span>
+                                  <span class="pages-item-del" @click.stop="deletePage(p)" title="删除该文件">
+                                      <i class="fa-solid fa-trash"></i>
+                                  </span>
+                              </button>
+                          </div>
+                          <div class="rp-stage">
+                              <!-- sandbox 刻意不含 allow-same-origin：页面脚本因此拿不到
+                                   本应用的 localStorage（会话记录）与带凭据的接口。
+                                   代价是父页面读不到它的 DOM —— 元素选取靠往页面里注入
+                                   picker.js、再由它 postMessage 回传（父页面用 ref 校验来源） -->
+                              <iframe v-if="isPreviewablePage" ref="pageFrame" class="pages-frame"
+                                      :key="'p'+pagePreviewKey" :src="pagePreviewUrl"
+                                      sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+                                      referrerpolicy="no-referrer"></iframe>
+                              <div v-else-if="isPreviewableImage" class="pages-image-wrap">
+                                  <img :key="'i'+pagePreviewKey" :src="pagePreviewUrl" :alt="pagePreviewName" />
+                              </div>
+                              <div v-else class="rp-stage-empty">
+                                  <i class="fa-regular fa-eye"></i>
+                                  <div>从上方选择一个页面进行预览</div>
+                                  <div class="rp-empty-desc">页面在独立沙箱中运行，不影响本应用的状态与数据</div>
+                              </div>
+                          </div>
+                      </template>
+                  </template>
+
+                  <!-- ② 工作区文件 -->
+                  <template v-else>
+                      <div class="rp-bar">
+                          <span class="rp-bar-text" :title="workspace.path">
+                              {{workspace.name || '工作区'}} · {{visibleTreeRows.length}} 项
+                          </span>
+                          <button class="rp-icon-btn" @click="refreshTree" title="刷新文件树">
+                              <i class="fa-solid fa-rotate"></i>
+                          </button>
+                      </div>
+                      <div class="fp-tree">
+                          <div v-if="treeLoading[''] && !visibleTreeRows.length" class="rp-hint">
+                              <i class="fa-solid fa-circle-notch fa-spin"></i> 读取中…
+                          </div>
+                          <div v-else-if="!visibleTreeRows.length" class="rp-empty">
+                              <i class="fa-regular fa-folder-open"></i>
+                              <div class="rp-empty-title">工作区是空的</div>
+                              <div class="rp-empty-desc">{{workspace.path}}</div>
+                          </div>
+                          <button v-for="row in visibleTreeRows" :key="row.node.path" class="fp-row"
+                                  :class="{active:row.node.path===selectedFilePath}"
+                                  :style="{paddingLeft:(10 + row.depth*14)+'px'}"
+                                  @click="row.node.type==='dir' ? toggleDir(row.node) : openWorkspaceFile(row.node)"
+                                  :title="row.node.name">
+                              <i class="fa-solid fp-icon" :class="row.node.type==='dir'
+                                  ? (isExpanded(row.node.path)?'fa-folder-open':'fa-folder')
+                                  : fileIcon(row.node.name)"></i>
+                              <span class="fp-name">{{row.node.name}}</span>
+                              <i v-if="treeLoading[row.node.path]"
+                                 class="fa-solid fa-circle-notch fa-spin fp-spin"></i>
+                              <span v-else-if="row.node.type==='file'" class="fp-size">{{formatSize(row.node.size)}}</span>
+                          </button>
+                      </div>
+                      <div class="fp-preview">
+                          <div v-if="filePreviewLoading" class="rp-hint">
+                              <i class="fa-solid fa-circle-notch fa-spin"></i> 读取中…
+                          </div>
+                          <div v-else-if="filePreviewError" class="rp-empty">
+                              <i class="fa-solid fa-triangle-exclamation"></i>
+                              <div class="rp-empty-desc">{{filePreviewError}}</div>
+                          </div>
+                          <template v-else-if="filePreview">
+                              <div class="fp-preview-head">
+                                  <i class="fa-solid" :class="fileIcon(filePreview.name)"></i>
+                                  <span class="fp-preview-name" :title="filePreview.path">{{filePreview.path}}</span>
+                                  <span class="fp-size">{{formatSize(filePreview.size)}} · {{filePreview.lines}} 行</span>
+                                  <span v-if="filePreview.truncated" class="fp-trunc" title="仅显示前 256KB">已截断</span>
+                              </div>
+                              <pre class="fp-code">{{filePreview.content}}</pre>
+                          </template>
+                          <div v-else class="rp-stage-empty">
+                              <i class="fa-regular fa-file-lines"></i>
+                              <div>点击上方文件查看内容</div>
+                              <div class="rp-empty-desc">仅支持文本文件；.env、密钥证书类文件不在此展示</div>
+                          </div>
+                      </div>
+                  </template>
+              </div>
+            </aside>
+        </div>
+        <div v-if="showConfirm" class="modal-overlay" @click.self="cancelModal">
+            <div class="modal-box">
+                <div class="modal-title">{{confirmTitle}}</div>
+                <div class="modal-desc">{{confirmDesc}}</div>
+                <div class="modal-actions">
+                    <button class="modal-btn cancel" @click="cancelModal">取消</button>
+                    <button class="modal-btn confirm" @click="confirmAction">{{confirmBtnText}}</button>
+                </div>
+            </div>
+        </div>
+        <div v-if="previewImg" class="image-modal" @click="previewImg=''">
+            <img :src="previewImg" @click.stop />
+        </div>
+
+        <!-- ── 新建工作区：浏览本机文件夹 ───────────────────────────── -->
+        <div v-if="wsPickerOpen" class="settings-overlay" @click.self="closeWorkspacePicker">
+            <div class="settings-panel ws-picker" role="dialog" aria-modal="true" aria-label="新建工作区">
+                <div class="settings-header">
+                    <div class="settings-title"><i class="fa-solid fa-folder-plus"></i> 新建工作区</div>
+                    <button class="settings-close" @click="closeWorkspacePicker" title="关闭 (Esc)">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+
+                <div class="ws-picker-body">
+                    <div class="ws-mode-tabs">
+                        <button class="ws-mode-tab" :class="{active: wsPickMode==='folder'}"
+                                @click="wsTogglePickMode('folder')">
+                            <i class="fa-solid fa-folder"></i> 选择文件夹
+                        </button>
+                        <button class="ws-mode-tab" :class="{active: wsPickMode==='files'}"
+                                @click="wsTogglePickMode('files')">
+                            <i class="fa-solid fa-file-lines"></i> 选择文件
+                        </button>
+                    </div>
+
+                    <div class="ws-path-bar">
+                        <button class="ws-nav-btn" @click="wsBrowseParent"
+                                :disabled="!wsBrowseData.parent" title="上一级">
+                            <i class="fa-solid fa-arrow-up"></i>
+                        </button>
+                        <button class="ws-nav-btn" @click="wsLoad('')" title="回到盘符列表">
+                            <i class="fa-solid fa-hard-drive"></i>
+                        </button>
+                        <input class="ws-path-input" v-model="wsPathInput"
+                               @keydown.enter="wsLoad(wsPathInput)"
+                               placeholder="直接输入路径，例如 D:\code\demo，回车跳转" />
+                        <button class="ws-nav-btn" @click="wsLoad(wsPathInput)" title="跳转">
+                            <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                    </div>
+
+                    <!-- 目录列表 -->
+                    <div class="ws-list">
+                        <div v-if="wsLoading" class="ws-list-hint">
+                            <i class="fa-solid fa-circle-notch fa-spin"></i> 读取中…
+                        </div>
+                        <template v-else>
+                            <div v-if="wsBrowseData.is_root" class="ws-list-hint">
+                                {{ wsPickMode==='files' ? '选择一个磁盘或目录开始浏览（可多选文件）' : '选择一个磁盘或位置开始浏览' }}
+                            </div>
+                            <template v-if="wsPickMode==='files'">
+                                <button v-for="e in wsBrowseData.entries" :key="e.path"
+                                        class="ws-list-item"
+                                        :class="{sel:e.path===wsSelectedPath, picked:wsFileSelected(e.path), file:e.type==='file'}"
+                                        @click="e.type==='file' ? wsToggleFile(e.path) : wsLoad(e.path)">
+                                    <i class="fa-solid"
+                                       :class="e.type==='drive'?'fa-hard-drive':(e.type==='home'?'fa-house':(e.type==='file'?'fa-file-lines':'fa-folder'))"></i>
+                                    <span class="ws-list-name">{{e.name}}</span>
+                                    <span class="ws-list-file-check" v-if="e.type==='file'">
+                                        <i class="fa-solid" :class="wsFileSelected(e.path)?'fa-check-square':'fa-square'"></i>
+                                    </span>
+                                    <span class="ws-list-enter" v-if="e.type!=='file'" @click.stop="wsLoad(e.path)"
+                                          title="进入该目录">
+                                        <i class="fa-solid fa-arrow-right"></i>
+                                    </span>
+                                </button>
+                            </template>
+                            <template v-else>
+                                <button v-for="e in wsBrowseData.entries" :key="e.path"
+                                        class="ws-list-item"
+                                        :class="{sel:e.path===wsSelectedPath}"
+                                        @click="wsSelectedPath=e.path"
+                                        @dblclick="e.type==='dir' ? wsLoad(e.path) : null">
+                                    <i class="fa-solid"
+                                       :class="e.type==='drive'?'fa-hard-drive':(e.type==='home'?'fa-house':'fa-folder')"></i>
+                                    <span class="ws-list-name">{{e.name}}</span>
+                                    <span class="ws-list-enter" @click.stop="e.type==='dir' && wsLoad(e.path)"
+                                          title="进入该目录">
+                                        <i class="fa-solid fa-arrow-right"></i>
+                                    </span>
+                                </button>
+                            </template>
+                            <div v-if="!wsBrowseData.is_root && !wsBrowseData.entries.length" class="ws-list-hint">
+                                {{ wsPickMode==='files' ? '该目录下没有文件' : '该目录下没有子文件夹' }}
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- 新建文件夹 -->
+                    <div class="ws-mkdir" v-if="wsBrowseData.path">
+                        <input class="ws-path-input" v-model="wsNewFolderName"
+                               @keydown.enter="wsCreateFolder"
+                               placeholder="在当前目录新建文件夹，输入名称后回车" />
+                        <button class="settings-btn" @click="wsCreateFolder"
+                                :disabled="!wsNewFolderName.trim()">
+                            <i class="fa-solid fa-folder-plus"></i> 新建
+                        </button>
+                    </div>
+
+                    <!-- 已选 + 名称 -->
+                    <div class="ws-picker-foot">
+                        <div class="ws-selected" v-if="wsPickMode==='files'">
+                            <div class="ws-selected-label">已选文件 ({{wsSelectedFiles.length}})</div>
+                            <div class="ws-selected-files">
+                                <div v-for="f in wsSelectedFiles" :key="f" class="ws-selected-file">
+                                    <i class="fa-solid fa-file-lines"></i>
+                                    <span>{{f}}</span>
+                                    <button class="ws-remove-file" @click="wsToggleFile(f)" title="移除">
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+                                <div v-if="!wsSelectedFiles.length" class="ws-selected-empty">点击列表中的文件来选择</div>
+                            </div>
+                        </div>
+                        <div class="ws-selected" v-else>
+                            <div class="ws-selected-label">已选择</div>
+                            <div class="ws-selected-path">{{wsSelectedPath || '（未选择）'}}</div>
+                        </div>
+                        <input class="ws-name-input" v-model="wsNewName"
+                               :placeholder="wsDefaultName" />
+                    </div>
+                </div>
+
+                <div class="settings-header ws-picker-actions">
+                    <button class="settings-btn" @click="closeWorkspacePicker">取消</button>
+                    <button class="settings-btn primary"
+                            :disabled="wsCreating || (wsPickMode==='files' ? !wsSelectedFiles.length : !wsSelectedPath)"
+                            @click="confirmCreateWorkspace">
+                        <i class="fa-solid fa-check"></i>
+                        {{wsCreating ? '创建中…' : '创建并切换'}}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── 设置面板 ─────────────────────────────────────────────── -->
+        <div v-if="settingsOpen" class="settings-overlay" @click.self="closeSettings">
+            <div class="settings-panel" role="dialog" aria-modal="true" aria-label="设置">
+                <div class="settings-header">
+                    <div class="settings-title">设置</div>
+                    <div class="settings-header-actions">
+                        <button class="settings-btn" @click="notImplemented('打开配置文件')" title="打开配置文件">
+                            <i class="fa-solid fa-file-lines"></i> 打开配置文件
+                        </button>
+                        <button class="settings-close" @click="closeSettings" title="关闭 (Esc)">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="settings-body">
+                    <nav class="settings-nav">
+                        <button v-for="t in settingsTabs" :key="t.id"
+                                class="settings-nav-item"
+                                :class="{active:settingsTab===t.id}"
+                                @click="settingsTab=t.id">
+                            <i :class="t.icon"></i><span>{{t.label}}</span>
+                        </button>
+                    </nav>
+
+                    <div class="settings-content">
+                        <!-- 通用设置 -->
+                        <template v-if="settingsTab==='general'">
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">权限</div>
+                                    <div class="settings-label-desc">选择新会话的默认权限模式</div>
+                                </div>
+                                <select class="settings-select" v-model="settings.permission">
+                                    <option value="workspace">工作区内修改</option>
+                                    <option value="readonly">只读</option>
+                                    <option value="full">完全访问</option>
+                                </select>
+                            </div>
+
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">语言</div>
+                                </div>
+                                <select class="settings-select" v-model="settings.language">
+                                    <option value="zh">中文</option>
+                                    <option value="en">English</option>
+                                </select>
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="settings-label-title">外观</div>
+                                <div class="theme-choice">
+                                    <button v-for="c in themeChoices" :key="c.id"
+                                            class="theme-card"
+                                            :class="{active:themeMode===c.id}"
+                                            @click="setThemeMode(c.id)">
+                                        <i :class="c.icon"></i><span>{{c.label}}</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">字号大小</div>
+                                    <div class="settings-label-desc">仅影响会话内容的字号</div>
+                                </div>
+                                <div class="settings-inline">
+                                    <input class="settings-input" type="number" min="12" max="22"
+                                           v-model.number="settings.fontSize" />
+                                    <span class="settings-unit">px</span>
+                                </div>
+                            </div>
+
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">对话显示</div>
+                                    <div class="settings-label-desc">控制已完成轮次的过程内容</div>
+                                </div>
+                                <select class="settings-select" v-model="settings.density">
+                                    <option value="compact">紧凑</option>
+                                    <option value="standard">标准</option>
+                                    <option value="detailed">详细</option>
+                                </select>
+                            </div>
+
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">繁忙时的发送行为</div>
+                                    <div class="settings-label-desc">智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为</div>
+                                </div>
+                                <select class="settings-select" v-model="settings.busySend">
+                                    <option value="queue">排队发送</option>
+                                    <option value="interrupt">打断当前</option>
+                                    <option value="ignore">忽略</option>
+                                </select>
+                            </div>
+                        </template>
+
+                        <!-- 模型 -->
+                        <template v-else-if="settingsTab==='model'">
+                            <!-- 换 API：密钥 / 接口地址可直接改，验证通过后**立即生效**（无需重启），
+                                 并写回项目根目录的 .env 持久化。密钥留空 = 不修改。 -->
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">接口地址（Base URL）</div>
+                                    <div class="settings-label-desc">OpenAI 兼容端点，例如 https://api.deepseek.com</div>
+                                </div>
+                                <input class="settings-field" v-model.trim="apiForm.base_url" spellcheck="false"
+                                       :disabled="apiSaving || runtimeInfo.writable === false"
+                                       placeholder="https://api.deepseek.com" />
+                            </div>
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">API 密钥</div>
+                                    <div class="settings-label-desc">
+                                        当前：<code class="settings-code">{{ runtimeInfo.api_key_masked || '未设置' }}</code>
+                                        ｜ 留空表示不修改，保存后写入 .env
+                                    </div>
+                                </div>
+                                <div class="settings-key-wrap">
+                                    <input class="settings-field settings-field-key" v-model.trim="apiForm.api_key"
+                                           :type="apiKeyVisible ? 'text' : 'password'" spellcheck="false"
+                                           autocomplete="off" :disabled="apiSaving || runtimeInfo.writable === false"
+                                           :placeholder="runtimeInfo.api_key_masked || 'sk-...'" />
+                                    <button class="settings-eye" type="button" @click="apiKeyVisible = !apiKeyVisible"
+                                            :title="apiKeyVisible ? '隐藏密钥' : '显示密钥'">
+                                        <i :class="apiKeyVisible ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye'"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">应用配置</div>
+                                    <div class="settings-label-desc api-hint" :class="apiHintClass">{{ apiSaveHint }}</div>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="settings-btn" @click="resetApiForm" :disabled="apiSaving">重置</button>
+                                    <button class="settings-btn primary" @click="saveApiSettings"
+                                            :disabled="apiSaving || runtimeInfo.writable === false">
+                                        <i :class="apiSaving ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-bolt'"></i>
+                                        {{ apiSaving ? '验证中…' : '保存并生效' }}
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">对话模型</div>
+                                    <div class="settings-label-desc">由后端 .env 的 LLM_MODEL 决定，此处只读</div>
+                                </div>
+                                <span class="settings-readonly">{{ runtimeInfo.model || '未上报' }}</span>
+                            </div>
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">温度</div>
+                                    <div class="settings-label-desc">由 .env 的 LLM_TEMPERATURE 决定</div>
+                                </div>
+                                <span class="settings-readonly">{{ runtimeInfo.temperature ?? '—' }}</span>
+                            </div>
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">嵌入模型</div>
+                                    <div class="settings-label-desc">知识库检索使用的句向量模型</div>
+                                </div>
+                                <span class="settings-readonly">{{ runtimeInfo.embedding || '未上报' }}</span>
+                            </div>
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">索引文档 / 片段</div>
+                                    <div class="settings-label-desc">知识库当前索引规模</div>
+                                </div>
+                                <span class="settings-readonly">{{ runtimeInfo.kbDocs }} 篇 / {{ runtimeInfo.kbChunks }} 片段</span>
+                            </div>
+                        </template>
+
+                        <!-- 插件 -->
+                        <template v-else-if="settingsTab==='plugins'">
+                            <div class="settings-label-desc" style="margin-bottom:12px">
+                                以下工具由后端注册，前端无法单独开关。
+                            </div>
+                            <div class="settings-row" v-for="p in plugins" :key="p.name">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">{{ p.label }}</div>
+                                    <div class="settings-label-desc">{{ p.desc }}</div>
+                                </div>
+                                <span class="settings-badge" :class="p.on?'on':'off'">{{ p.on ? '已启用' : '未启用' }}</span>
+                            </div>
+                        </template>
+
+                        <!-- Agent 预设 -->
+                        <template v-else>
+                            <div class="settings-label-desc" style="margin-bottom:12px">
+                                Agent 行为由后端系统提示词与工具集定义，暂时只读展示。
+                            </div>
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">可用工具</div>
+                                    <div class="settings-label-desc">当前注册到模型的工具清单</div>
+                                </div>
+                                <span class="settings-readonly">{{ runtimeInfo.tools ?? '—' }} 个</span>
+                            </div>
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">会话保留</div>
+                                    <div class="settings-label-desc">服务端内存会话的空闲超时</div>
+                                </div>
+                                <span class="settings-readonly">1 小时</span>
+                            </div>
+                            <div class="settings-row">
+                                <div class="settings-label">
+                                    <div class="settings-label-title">代码执行</div>
+                                    <div class="settings-label-desc">独立子进程 + 环境变量白名单，超时 30 秒</div>
+                                </div>
+                                <span class="settings-badge on">已隔离</span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div v-if="menuSessionId" class="session-menu" :style="menuPos" @click.stop>
+            <button class="session-menu-item" @click="renameSession(menuSessionId)">
+                <i class="fa-solid fa-pen"></i>{{renamingId===menuSessionId?'重命名中...':'重命名'}}
+            </button>
+            <button class="session-menu-item" @click="togglePin(menuSessionId)">
+                <i class="fa-solid" :class="getPinned(menuSessionId)?'fa-map-pin':'fa-thumbtack'"></i>{{getPinned(menuSessionId)?'取消置顶':'置顶'}}
+            </button>
+            <button class="session-menu-item" @click="shareSession(menuSessionId)">
+                <i class="fa-solid fa-share-nodes"></i>分享
+            </button>
+            <button class="session-menu-item danger" @click="confirmDeleteSession(menuSessionId)">
+                <i class="fa-solid fa-trash"></i>删除
+            </button>
+        </div>
+        <div v-if="renamingId" class="modal-overlay" @click.self="cancelRename">
+            <div class="modal-box">
+                <div class="modal-title">重命名对话</div>
+                <div style="margin:16px 0 20px">
+                    <input v-model="renameValue" ref="renameInput" style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-primary);color:var(--text-primary);font-size:0.9rem;outline:none;transition:border-color .15s" @focus="$event.target.select()" @keydown.enter.exact="confirmRename" @keydown.escape="cancelRename" />
+                </div>
+                <div class="modal-actions">
+                    <button class="modal-btn cancel" @click="cancelRename">取消</button>
+                    <button class="modal-btn confirm" style="background:var(--accent)" @click="confirmRename">确定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
